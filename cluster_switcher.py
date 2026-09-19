@@ -913,7 +913,6 @@ def set_lang(lang):
     global current_lang
     current_lang = lang
     update_ui()
-    update_tray_menu()
     settings = load_settings()
     settings["lang"] = lang
     save_settings(settings)
@@ -987,57 +986,15 @@ def create_donate_section():
 create_donate_section()
 
 # трей
-tray_icon = None  # глобальная ссылка, чтобы можно было обновить меню при смене языка
-
-def build_tray_menu(pystray, on_show, on_quit):
-    """Собирает меню трея с актуальным языком.
-    default=True не ставим — на macOS он крашит процесс в связке с tkinter."""
-    tray_lang = LANG[current_lang]
-    return pystray.Menu(
-        pystray.MenuItem(tray_lang["tray_show"], on_show),
-        pystray.MenuItem(tray_lang["tray_quit"], on_quit)
-    )
-
-def update_tray_menu():
-    """Пересобирает меню трея при смене языка."""
-    if tray_icon is None:
-        return
-    try:
-        import pystray
-        tray_icon.menu = build_tray_menu(pystray, tray_icon._on_show, tray_icon._on_quit)
-        tray_icon.update_menu()
-    except Exception as e:
-        logger.error(f"Не удалось обновить меню трея: {e}")
+# ВАЖНО: pystray в связке с tkinter внутри .app крашит процесс через ~10 сек
+# (NSInvalidArgumentException в Tk_GetColor при живом rumps-бэкенде).
+# Поэтому трей отключён — окно закрывается крестиком, обработчик уже стоит
+# через root.protocol("WM_DELETE_WINDOW", quit_app).
+tray_icon = None
 
 def setup_tray():
-    global tray_icon
-    try:
-        import pystray
-        from PIL import Image
-
-        icon_image = Image.new('RGB', (64, 64), color=(43, 122, 43))
-
-        def on_show(icon, item):
-            # tkinter не потокобезопасен — дёргаем его только через root.after
-            root.after(0, root.deiconify)
-
-        def on_quit(icon, item):
-            # quit_app сам делает destroy + sys.exit в главном потоке
-            icon.stop()
-            root.after(0, quit_app)
-
-        # сохраняем обработчики, чтобы update_tray_menu мог пересобрать меню
-        tray_icon = pystray.Icon(
-            "ClusterSwitcher", icon_image, "Tanks Blitz Cluster Switcher",
-            menu=build_tray_menu(pystray, on_show, on_quit)
-        )
-        tray_icon._on_show = on_show
-        tray_icon._on_quit = on_quit
-
-        tray_thread = threading.Thread(target=tray_icon.run, daemon=True)
-        tray_thread.start()
-    except ImportError:
-        pass
+    """Трей отключён — см. комментарий выше."""
+    return
 
 try:
     setup_tray()
