@@ -9,7 +9,7 @@ from setuptools import setup
 import os
 
 APP = ['cluster_switcher.py']
-DATA_FILES = []
+DATA_FILES = ['hosts_original']
 OPTIONS = {
     'iconfile': 'app_icon.icns',
     'packages': ['PIL', 'pystray', 'urllib'],

@@ -32,10 +32,58 @@ from tkinter import ttk, messagebox
 # цвета для crash-окна заданы заранее, на случай если краш до загрузки темы
 CRASH_BG = "#1a1a1a"
 CRASH_FG = "#ffffff"
+# защита от рекурсии: если crash-окно уже открыто, второй краш не создаёт новое
+_crash_shown = False
 
 # --- пути ---
 HOSTS_PATH = "/etc/hosts"
-HOSTS_BACKUP = "/etc/hosts.backup.cluster_switcher"
+
+# папка приложения: для .app — папка рядом с ним, для разработки — папка со скриптом
+if getattr(sys, 'frozen', False):
+    APP_FOLDER = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
+    RESOURCES_DIR = os.path.join(APP_FOLDER, "Contents", "Resources")
+else:
+    APP_FOLDER = os.path.dirname(os.path.abspath(__file__))
+    RESOURCES_DIR = APP_FOLDER
+
+# файл бекапа hosts в папке с приложением
+BACKUP_HOSTS = os.path.join(APP_FOLDER, "backup_hosts")
+# встроенный чистый (оригинальный) hosts
+HOSTS_ORIGINAL = os.path.join(RESOURCES_DIR, "hosts_original")
+# запасной путь, если папка приложения недоступна для записи
+BACKUP_HOSTS_FALLBACK = os.path.join(os.path.expanduser("~/.cluster_switcher"), "backup_hosts")
+
+def get_backup_hosts_path():
+    """Возвращает путь к backup_hosts, куда реально можно писать."""
+    try:
+        if os.access(APP_FOLDER, os.W_OK):
+            return BACKUP_HOSTS
+    except Exception:
+        pass
+    return BACKUP_HOSTS_FALLBACK
+
+def ensure_backup_hosts():
+    """Создаёт файл backup_hosts из оригинального hosts, если его ещё нет."""
+    path = get_backup_hosts_path()
+    if os.path.exists(path):
+        return path
+    try:
+        if os.path.exists(HOSTS_ORIGINAL):
+            with open(HOSTS_ORIGINAL, "r", encoding="utf-8", errors="ignore") as src:
+                content = src.read()
+        else:
+            # если встроенный файл потерян — пишем стандартный минимум macOS
+            content = (
+                "##\n# Host Database\n#\n# localhost is used to configure the loopback interface\n"
+                "# when the system is booting.  Do not change this entry.\n##\n"
+                "127.0.0.1	localhost\n255.255.255.255	broadcasthost\n::1		localhost\n"
+            )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"Создан файл бекапа: {path}")
+    except Exception as e:
+        logger.error(f"Не удалось создать backup_hosts: {e}")
+    return path
 
 # кластеры и их адреса
 CLUSTERS = {
@@ -98,11 +146,24 @@ LANG = {
         "upd_error": "Ошибка проверки",
         "restore_title": "Восстановление hosts",
         "restore_btn": "Восстановить hosts",
-        "restore_no_backup": "Резервная копия не найдена.\n\nСначала заблокируй хотя бы один кластер — тогда создастся бэкап.",
-        "restore_success": "Файл hosts восстановлен из резервной копии.\nDNS-кэш очищен.",
-        "restore_confirm": "Восстановить hosts из последней резервной копии?\n\nЭто отменит все текущие блокировки.",
+        "restore_no_backup": "Оригинальный бекап hosts не найден.\n\nФайл backup_hosts создастся сам из встроенной копии.",
+        "restore_success": "Файл hosts восстановлен из оригинального бекапа.\nDNS-кэш очищен.",
+        "restore_confirm": "Восстановить hosts из оригинального бекапа?\n\nЭто отменит все текущие блокировки.",
+        "show_hosts_btn": "Показать hosts",
+        "clear_hosts_btn": "Очистить hosts",
+        "clear_hosts_title": "Очистка hosts",
+        "clear_hosts_confirm": "Удалить ВСЕ блокировки серверов из файла hosts?\n\nЭто полностью разблокирует игру.",
+        "clear_hosts_done": "Все блокировки удалены из hosts.\nDNS-кэш очищен.",
+        "clear_hosts_nothing": "Блокировок в hosts не найдено.",
+        "clear_hosts_error": "Ошибка очистки",
+        "show_hosts_title": "Содержимое /etc/hosts",
+        "show_hosts_copy": "Скопировать",
+        "show_hosts_copied": "Скопировано в буфер обмена!",
+        "show_hosts_note": "Строки с 127.0.0.1 login — это активные блокировки.",
         "password_cancel": "Отмена",
         "password_cancel_text": "Ты отменил ввод пароля.\n\nИзменения не были применены.",
+        "tray_show": "Показать",
+        "tray_quit": "Выход",
     },
     "en": {
         "title": "Tanks Blitz Cluster Switcher",
@@ -153,11 +214,24 @@ LANG = {
         "upd_error": "Check failed",
         "restore_title": "Restore hosts",
         "restore_btn": "Restore hosts",
-        "restore_no_backup": "Backup not found.\n\nBlock at least one cluster first — a backup will be created then.",
-        "restore_success": "Hosts file restored from backup.\nDNS cache flushed.",
-        "restore_confirm": "Restore hosts from the last backup?\n\nThis will undo all current blocks.",
+        "restore_no_backup": "Original hosts backup not found.\n\nThe backup_hosts file will be created from the built-in copy.",
+        "restore_success": "Hosts file restored from the original backup.\nDNS cache flushed.",
+        "restore_confirm": "Restore hosts from the original backup?\n\nThis will undo all current blocks.",
+        "show_hosts_btn": "Show hosts",
+        "clear_hosts_btn": "Clear hosts",
+        "clear_hosts_title": "Clearing hosts",
+        "clear_hosts_confirm": "Remove ALL server blocks from hosts file?\n\nThis will fully unblock the game.",
+        "clear_hosts_done": "All blocks removed from hosts.\nDNS cache cleared.",
+        "clear_hosts_nothing": "No blocks found in hosts.",
+        "clear_hosts_error": "Clear error",
+        "show_hosts_title": "Contents of /etc/hosts",
+        "show_hosts_copy": "Copy",
+        "show_hosts_copied": "Copied to clipboard!",
+        "show_hosts_note": "Lines with 127.0.0.1 login are active blocks.",
         "password_cancel": "Cancelled",
         "password_cancel_text": "You cancelled the password prompt.\n\nNo changes were made.",
+        "tray_show": "Show",
+        "tray_quit": "Quit",
     }
 }
 
@@ -166,8 +240,16 @@ DONATE_URL = "https://pay.cloudtips.ru/p/0733bd19"
 APP_VERSION = "1.0.0"
 
 def version_tuple(v):
-    # "1.10.0" -> (1, 10, 0), чтобы сравнение работало нормально
-    return tuple(int(x) for x in v.replace("v", "").split("."))
+    # "1.10.0" -> (1, 10, 0)
+    # "v1.0.0-beta" -> (1, 0, 0) — нестандартные теги не роняют проверку обновлений
+    clean = v.lstrip("v").split("-")[0]  # отрезаем ведущую v и суффиксы после -
+    parts = []
+    for x in clean.split("."):
+        try:
+            parts.append(int(x))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
 
 def load_settings():
     try:
@@ -196,7 +278,8 @@ def open_github():
     webbrowser.open("https://github.com/wafflee16092010-max/cluster-switcher-tanks-blitz-macos")
 
 def open_email():
-    webbrowser.open("mailto:artemtkacev417@email.com")
+    # webbrowser.open с mailto: не работает в frozen .app на macOS — используем open
+    subprocess.run(["open", "mailto:artemtkacev417@gmail.com"])
 
 def open_app_folder():
     # для .app надо подняться на 3 уровня от executable, чтобы найти папку с самим .app
@@ -204,11 +287,25 @@ def open_app_folder():
         app_folder = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
     else:
         app_folder = os.path.dirname(os.path.abspath(__file__))
-    subprocess.run(["open", app_folder])
+    # open на .app запустит приложение, а не покажет папку — поэтому -R (показать в Finder)
+    subprocess.run(["open", "-R", app_folder])
 
 # --- crash handler ---
 def show_crash_message(error_text):
-    crash_window = tk.Toplevel()
+    global _crash_shown
+    # если crash-окно уже открыто — второй краш уходит в stderr, без рекурсии
+    if _crash_shown:
+        print(error_text, file=sys.stderr)
+        return
+    _crash_shown = True
+    # окно краша должно работать даже если главный root ещё не создан
+    try:
+        crash_window = tk.Toplevel()
+    except Exception:
+        try:
+            crash_window = tk.Tk()
+        except Exception:
+            return
     crash_window.title("Что-то пошло не так")
     crash_window.geometry("500x350")
     crash_window.configure(bg=CRASH_BG)
@@ -220,12 +317,18 @@ def show_crash_message(error_text):
     tk.Label(crash_window, text="Свяжись со мной, я помогу разобраться:", bg=CRASH_BG, fg=CRASH_FG, font=("Arial", 11)).pack()
     tk.Label(crash_window, text="Telegram: @waffleeb", bg=CRASH_BG, fg="#4fc3f7", font=("Arial", 10, "bold")).pack()
     tk.Label(crash_window, text="GitHub: github.com/wafflee16092010-max", bg=CRASH_BG, fg="#4fc3f7", font=("Arial", 10, "bold")).pack()
-    tk.Label(crash_window, text="Почта: artemtkacev417@email.com", bg=CRASH_BG, fg="#4fc3f7", font=("Arial", 10, "bold")).pack()
+    tk.Label(crash_window, text="Почта: artemtkacev417@gmail.com", bg=CRASH_BG, fg="#4fc3f7", font=("Arial", 10, "bold")).pack()
     tk.Button(crash_window, text="Закрыть", command=crash_window.destroy, bg="#555", fg="white", font=("Arial", 10, "bold")).pack(pady=15)
+    # без mainloop окно мигнёт и исчезнет при выходе — держим открытым
+    crash_window.mainloop()
 
 def global_exception_handler(exc_type, exc_value, exc_tb):
     error_msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
-    show_crash_message(error_msg)
+    logger.error(f"Краш: {error_msg}")
+    try:
+        show_crash_message(error_msg)
+    except Exception:
+        pass
 
 sys.excepthook = global_exception_handler
 
@@ -235,13 +338,16 @@ def run_admin_script(commands):
     Возвращает (success, error_msg)."""
     script_path = None
     try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='cluster_sw_') as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='cluster_sw_', encoding='utf-8') as f:
             for cmd in commands:
                 f.write(cmd + "\n")
             script_path = f.name
 
         applescript = f'do shell script "sh {script_path}" with administrator privileges'
-        result = subprocess.run(["osascript", "-e", applescript], capture_output=True, text=True)
+        # text=True ломается на кириллице в выводе osascript (локаль C в frozen-приложении),
+        # поэтому кодируем вывод в UTF-8 явно
+        result = subprocess.run(["osascript", "-e", applescript], capture_output=True,
+                                encoding="utf-8", errors="replace")
 
         if result.returncode != 0:
             stderr = result.stderr or ""
@@ -266,8 +372,9 @@ def apply_blocking(selected_clusters):
     """Пишет блокировки в hosts через osascript."""
     logger.info(f"Запрос блокировки: {', '.join(selected_clusters) if selected_clusters else 'нет'}")
 
+    ensure_backup_hosts()
+
     commands = [
-        f"cp '{HOSTS_PATH}' '{HOSTS_BACKUP}'",
         f"sed -i '' '/127.0.0.1 login/d' '{HOSTS_PATH}'",
     ]
     for key in selected_clusters:
@@ -297,15 +404,16 @@ def apply_blocking(selected_clusters):
     return True
 
 def restore_hosts_from_backup():
-    """Откатывает hosts из бэкапа."""
-    if not os.path.exists(HOSTS_BACKUP):
+    """Восстанавливает hosts из оригинального бекапа backup_hosts."""
+    backup_path = ensure_backup_hosts()
+    if not os.path.exists(backup_path):
         lang = LANG[current_lang]
         messagebox.showwarning(lang["restore_title"], lang["restore_no_backup"])
-        logger.warning("Восстановление — бэкап не найден")
+        logger.warning("Восстановление — backup_hosts не найден")
         return
 
     success, error_msg = run_admin_script([
-        f"cp '{HOSTS_BACKUP}' '{HOSTS_PATH}'",
+        f"cp '{backup_path}' '{HOSTS_PATH}'",
         "dscacheutil -flushcache",
         "killall -HUP mDNSResponder",
     ])
@@ -325,6 +433,93 @@ def restore_hosts_from_backup():
     update_status_text()
 
 # --- обработчики кнопок ---
+# --- обработчики дополнительных кнопок hosts ---
+def show_hosts_content():
+    """Показывает содержимое /etc/hosts в отдельном окне."""
+    try:
+        if not os.path.exists(HOSTS_PATH):
+            messagebox.showerror(LANG[current_lang]["error_admin"], "hosts не найден")
+            return
+        with open(HOSTS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception as e:
+        messagebox.showerror(LANG[current_lang]["error_admin"], str(e))
+        return
+
+    lang = LANG[current_lang]
+    win = tk.Toplevel(root)
+    win.title(lang["show_hosts_title"])
+    win.geometry("600x450")
+    win.configure(bg="#1a1a1a")
+    win.transient(root)
+
+    txt = tk.Text(win, wrap="word", bg="#1a1a1a", fg="#ffffff", insertbackground="#ffffff",
+                  font=("Menlo", 11), relief="flat", padx=10, pady=10)
+    txt.pack(fill="both", expand=True, padx=10, pady=(10, 5))
+    txt.insert("1.0", content)
+    txt.config(state="disabled")
+
+    note = tk.Label(win, text=lang["show_hosts_note"], bg="#1a1a1a", fg="#888888",
+                    font=("Arial", 9), justify="left")
+    note.pack(anchor="w", padx=12, pady=(0, 5))
+
+    btn_frame = tk.Frame(win, bg="#1a1a1a")
+    btn_frame.pack(pady=(0, 10))
+
+    # метка "скопировано" создаётся один раз, чтобы не наслаивались при повторных кликах
+    copied_label = tk.Label(btn_frame, text="", bg="#1a1a1a", fg="#2ed573", font=("Arial", 9))
+    copied_label.pack(side="left", padx=5)
+
+    def copy_all():
+        root.clipboard_clear()
+        root.clipboard_append(content)
+        copied_label.config(text=lang["show_hosts_copied"])
+
+    tk.Button(btn_frame, text=lang["show_hosts_copy"], command=copy_all,
+              bg="#4fc3f7", fg="#000000", relief="flat", font=("Arial", 10, "bold"),
+              padx=12, pady=4).pack(side="left", padx=5)
+    tk.Button(btn_frame, text=lang["upd_ok"], command=win.destroy,
+              bg="#333333", fg="#ffffff", relief="flat", font=("Arial", 10, "bold"),
+              padx=12, pady=4).pack(side="left", padx=5)
+
+
+def clear_hosts_completely():
+    """Удаляет ВСЕ блокировки серверов из hosts."""
+    lang = LANG[current_lang]
+    try:
+        with open(HOSTS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            hosts_content = f.read()
+    except Exception as e:
+        messagebox.showerror(lang["clear_hosts_error"], str(e))
+        return
+
+    if "127.0.0.1 login" not in hosts_content:
+        messagebox.showinfo(lang["clear_hosts_title"], lang["clear_hosts_nothing"])
+        return
+
+    if not messagebox.askyesno(lang["clear_hosts_title"], lang["clear_hosts_confirm"]):
+        return
+
+    success, error_msg = run_admin_script([
+        f"sed -i '' '/127.0.0.1 login/d' '{HOSTS_PATH}'",
+        "dscacheutil -flushcache",
+        "killall -HUP mDNSResponder",
+    ])
+
+    if not success:
+        if error_msg is None:
+            logger.info("Очистка отменена пользователем")
+            messagebox.showinfo(lang["password_cancel"], lang["password_cancel_text"])
+        else:
+            logger.error(f"Ошибка очистки hosts: {error_msg}")
+            messagebox.showerror(lang["clear_hosts_error"], error_msg)
+        return
+
+    logger.info("Все блокировки удалены из hosts")
+    update_status_text()
+    messagebox.showinfo(lang["clear_hosts_title"], lang["clear_hosts_done"])
+
+
 def on_apply():
     selected = [k for k in cluster_keys if checkboxes[k].get()]
 
@@ -338,21 +533,18 @@ def on_apply():
     result = apply_blocking(selected)
     lang = LANG[current_lang]
     if result:
-        btn_apply.config(bg=BTN_GREEN_BG, fg=BTN_FG)
-        btn_apply._original_bg = BTN_GREEN_BG
         if selected:
             names = [lang["clusters"][k] for k in selected if k in lang["clusters"]]
             action_label.config(text=lang["last_action_block"].format(', '.join(names)))
         else:
             action_label.config(text=lang["last_action_unblock"])
-    else:
-        btn_apply.config(bg=BTN_GRAY_BG, fg=BTN_GRAY_FG)
-        btn_apply._original_bg = BTN_GRAY_BG
+    # цвет кнопки обновит update_status_text() по факту блокировок в hosts
     update_status_text()
 
 def on_restore_hosts():
     lang = LANG[current_lang]
-    if not os.path.exists(HOSTS_BACKUP):
+    backup_path = ensure_backup_hosts()
+    if not os.path.exists(backup_path):
         messagebox.showwarning(lang["restore_title"], lang["restore_no_backup"])
         return
     if messagebox.askyesno(lang["restore_title"], lang["restore_confirm"]):
@@ -366,6 +558,17 @@ def update_status_text():
         status_label.config(text=f"{lang['blocked']} {', '.join(names)}", fg="#ffaa00")
     else:
         status_label.config(text=lang["none"], fg="#88ff88")
+    # цвет кнопки Применить — по факту: есть блокировки -> зелёная, нет -> серо-оранжевая
+    try:
+        if blocked:
+            btn_apply.config(bg=BTN_GREEN_BG, fg=BTN_FG)
+            btn_apply._original_bg = BTN_GREEN_BG
+        else:
+            btn_apply.config(bg=BTN_GRAY_BG, fg=BTN_GRAY_FG)
+            btn_apply._original_bg = BTN_GRAY_BG
+    except Exception:
+        # btn_apply ещё не создан (первый вызов до построения UI) — просто пропускаем
+        pass
 
 def on_refresh():
     update_status_text()
@@ -374,7 +577,7 @@ def get_current_blocked():
     try:
         if not os.path.exists(HOSTS_PATH):
             return []
-        with open(HOSTS_PATH, "r") as f:
+        with open(HOSTS_PATH, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
     except Exception as e:
         logger.error(f"Не удалось прочитать hosts: {e}")
@@ -440,7 +643,7 @@ def show_about():
     for name, text, cmd in [
         ("Telegram", "@waffleeb", open_telegram),
         ("GitHub", "wafflee16092010-max", open_github),
-        ("Email", "artemtkacev417@email.com", open_email),
+        ("Email", "artemtkacev417@gmail.com", open_email),
     ]:
         lbl = tk.Label(content, text=f"  {name}: {text}", bg="#1a1a1a", fg="#4fc3f7", font=("Helvetica Neue", 9), cursor="hand2")
         lbl.pack(anchor="w", pady=2)
@@ -479,7 +682,62 @@ def check_updates():
 
     tk.Label(content_frame, text=lang["upd_checking"], bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 12)).pack(pady=20)
 
-    def check():
+    def alive():
+        # окно могли закрыть пока шёл запрос
+        try:
+            return update_window.winfo_exists()
+        except Exception:
+            return False
+
+    def show_result(data, error):
+        # все обновления UI — только в главном потоке
+        if not alive():
+            return
+        for w in content_frame.winfo_children():
+            w.destroy()
+
+        if error is not None:
+            tk.Label(content_frame, text=lang["upd_error"], bg=BG_COLOR, fg="#ff4444", font=("Arial", 12, "bold")).pack(pady=10)
+            if isinstance(error, urllib.error.HTTPError) and error.code == 404:
+                tk.Label(content_frame, text="GitHub repo not found", bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9)).pack(pady=5)
+            elif isinstance(error, urllib.error.HTTPError):
+                tk.Label(content_frame, text=f"HTTP {error.code}", bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9)).pack(pady=5)
+            else:
+                tk.Label(content_frame, text=str(error), bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9)).pack(pady=5)
+            tk.Button(content_frame, text=lang["upd_ok"], command=update_window.destroy,
+                      bg="#555555", fg="white", font=("Arial", 10), cursor="hand2",
+                      activebackground="#777777", relief="flat").pack(pady=10)
+            return
+
+        latest = data.get("tag_name", "0.0.0")
+
+        if version_tuple(latest) > version_tuple(APP_VERSION):
+            tk.Label(content_frame, text=lang["upd_found"], bg=BG_COLOR, fg="#88ff88", font=("Arial", 14, "bold")).pack(pady=10)
+            tk.Label(content_frame, text=lang["upd_new"].format(latest), bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 11)).pack(pady=5)
+            tk.Label(content_frame, text=lang["upd_current"].format(APP_VERSION), bg=BG_COLOR, fg="#666666", font=("Arial", 10)).pack()
+
+            if data.get("body"):
+                tk.Label(content_frame, text=lang["upd_changes"], bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9, "bold")).pack(pady=(10, 2))
+                desc = data["body"][:300] + "..." if len(data["body"]) > 300 else data["body"]
+                tk.Label(content_frame, text=desc, bg=BG_COLOR, fg="#d4d4d4", font=("Arial", 9), justify="left").pack(pady=5)
+
+            btn_frame = tk.Frame(content_frame, bg=BG_COLOR)
+            btn_frame.pack(pady=10)
+            tk.Button(btn_frame, text=lang["upd_download"], command=lambda: [open_github(), update_window.destroy()],
+                      bg="#2b7a2b", fg="white", font=("Arial", 10, "bold"), cursor="hand2",
+                      activebackground="#3c9e3c", relief="flat").pack(side="left", padx=5)
+            tk.Button(btn_frame, text=lang["upd_later"], command=update_window.destroy,
+                      bg="#555555", fg="white", font=("Arial", 10), cursor="hand2",
+                      activebackground="#777777", relief="flat").pack(side="left", padx=5)
+        else:
+            tk.Label(content_frame, text=lang["upd_latest"], bg=BG_COLOR, fg="#88ff88", font=("Arial", 12, "bold")).pack(pady=20)
+            tk.Label(content_frame, text=f"v{APP_VERSION}", bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 10)).pack()
+            tk.Button(content_frame, text=lang["upd_ok"], command=update_window.destroy,
+                      bg="#555555", fg="white", font=("Arial", 10), cursor="hand2",
+                      activebackground="#777777", relief="flat").pack(pady=10)
+
+    def fetch():
+        # сетевой запрос в фоне — иначе UI зависает на весь timeout
         try:
             req = urllib.request.Request(
                 "https://api.github.com/repos/wafflee16092010-max/cluster-switcher-tanks-blitz-macos/releases/latest",
@@ -487,57 +745,11 @@ def check_updates():
             )
             with urllib.request.urlopen(req, timeout=5) as response:
                 data = json.loads(response.read().decode())
-                latest = data.get("tag_name", "0.0.0")
-
-                for w in content_frame.winfo_children():
-                    w.destroy()
-
-                if version_tuple(latest) > version_tuple(APP_VERSION):
-                    tk.Label(content_frame, text=lang["upd_found"], bg=BG_COLOR, fg="#88ff88", font=("Arial", 14, "bold")).pack(pady=10)
-                    tk.Label(content_frame, text=lang["upd_new"].format(latest), bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 11)).pack(pady=5)
-                    tk.Label(content_frame, text=lang["upd_current"].format(APP_VERSION), bg=BG_COLOR, fg="#666666", font=("Arial", 10)).pack()
-
-                    if data.get("body"):
-                        tk.Label(content_frame, text=lang["upd_changes"], bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9, "bold")).pack(pady=(10, 2))
-                        desc = data["body"][:300] + "..." if len(data["body"]) > 300 else data["body"]
-                        tk.Label(content_frame, text=desc, bg=BG_COLOR, fg="#d4d4d4", font=("Arial", 9), justify="left").pack(pady=5)
-
-                    btn_frame = tk.Frame(content_frame, bg=BG_COLOR)
-                    btn_frame.pack(pady=10)
-                    tk.Button(btn_frame, text=lang["upd_download"], command=lambda: [open_github(), update_window.destroy()],
-                              bg="#2b7a2b", fg="white", font=("Arial", 10, "bold"), cursor="hand2",
-                              activebackground="#3c9e3c", relief="flat").pack(side="left", padx=5)
-                    tk.Button(btn_frame, text=lang["upd_later"], command=update_window.destroy,
-                              bg="#555555", fg="white", font=("Arial", 10), cursor="hand2",
-                              activebackground="#777777", relief="flat").pack(side="left", padx=5)
-                else:
-                    tk.Label(content_frame, text=lang["upd_latest"], bg=BG_COLOR, fg="#88ff88", font=("Arial", 12, "bold")).pack(pady=20)
-                    tk.Label(content_frame, text=f"v{APP_VERSION}", bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 10)).pack()
-                    tk.Button(content_frame, text=lang["upd_ok"], command=update_window.destroy,
-                              bg="#555555", fg="white", font=("Arial", 10), cursor="hand2",
-                              activebackground="#777777", relief="flat").pack(pady=10)
-
-        except urllib.error.HTTPError as e:
-            for w in content_frame.winfo_children():
-                w.destroy()
-            tk.Label(content_frame, text=lang["upd_error"], bg=BG_COLOR, fg="#ff4444", font=("Arial", 12, "bold")).pack(pady=10)
-            if e.code == 404:
-                tk.Label(content_frame, text="GitHub repo not found", bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9)).pack(pady=5)
-            else:
-                tk.Label(content_frame, text=f"HTTP {e.code}", bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9)).pack(pady=5)
-            tk.Button(content_frame, text=lang["upd_ok"], command=update_window.destroy,
-                      bg="#555555", fg="white", font=("Arial", 10), cursor="hand2",
-                      activebackground="#777777", relief="flat").pack(pady=10)
+            root.after(0, lambda: show_result(data, None))
         except Exception as e:
-            for w in content_frame.winfo_children():
-                w.destroy()
-            tk.Label(content_frame, text=lang["upd_error"], bg=BG_COLOR, fg="#ff4444", font=("Arial", 12, "bold")).pack(pady=10)
-            tk.Label(content_frame, text=str(e), bg=BG_COLOR, fg=FG_COLOR, font=("Arial", 9)).pack(pady=5)
-            tk.Button(content_frame, text=lang["upd_ok"], command=update_window.destroy,
-                      bg="#555555", fg="white", font=("Arial", 10), cursor="hand2",
-                      activebackground="#777777", relief="flat").pack(pady=10)
+            root.after(0, lambda: show_result(None, e))
 
-    root.after(100, check)
+    threading.Thread(target=fetch, daemon=True).start()
 
 def quit_app():
     root.destroy()
@@ -556,9 +768,11 @@ BTN_GRAY_FG = "#ff6600"
 # --- интерфейс ---
 root = tk.Tk()
 root.title(LANG[current_lang]["title"])
-root.geometry("480x680")
+root.geometry("480x720")
 root.resizable(False, False)
 root.configure(bg=BG_COLOR)
+# обработчик закрытия окна — до setup_tray(), чтобы работал даже без трея
+root.protocol("WM_DELETE_WINDOW", quit_app)
 
 style = ttk.Style()
 style.theme_use("clam")
@@ -661,6 +875,18 @@ btn_restore = create_custom_button(extras_frame2, "[ " + LANG[current_lang]["res
                                    on_restore_hosts, "#333333", "#ff6600", ("Courier", 9), width=16, height=1)
 btn_restore.pack()
 
+# доп. кнопки — третья строка (работа с содержимым hosts)
+extras_frame3 = tk.Frame(root, bg=BG_COLOR)
+extras_frame3.pack(pady=(0, 5))
+
+btn_show_hosts = create_custom_button(extras_frame3, "[ " + LANG[current_lang]["show_hosts_btn"] + " ]",
+                                      show_hosts_content, "#333333", "#4fc3f7", ("Courier", 9), width=16, height=1)
+btn_show_hosts.pack(side="left", padx=3)
+
+btn_clear_hosts = create_custom_button(extras_frame3, "[ " + LANG[current_lang]["clear_hosts_btn"] + " ]",
+                                       clear_hosts_completely, "#333333", "#ff7675", ("Courier", 9), width=16, height=1)
+btn_clear_hosts.pack(side="left", padx=3)
+
 # переключение языка
 def update_ui():
     lang = LANG[current_lang]
@@ -673,6 +899,8 @@ def update_ui():
     btn_about.config(text="[ " + lang["about"] + " ]")
     btn_updates.config(text="[ " + lang["check_updates"] + " ]")
     btn_restore.config(text="[ " + lang["restore_btn"] + " ]")
+    btn_show_hosts.config(text="[ " + lang["show_hosts_btn"] + " ]")
+    btn_clear_hosts.config(text="[ " + lang["clear_hosts_btn"] + " ]")
     donate_label.config(text=lang["donate"])
     contact_title.config(text=lang["contact"])
     folder_btn.config(text="[ " + lang["open_folder"] + " ]")
@@ -685,6 +913,7 @@ def set_lang(lang):
     global current_lang
     current_lang = lang
     update_ui()
+    update_tray_menu()
     settings = load_settings()
     settings["lang"] = lang
     save_settings(settings)
@@ -727,13 +956,16 @@ def create_contact_section():
                              fg="#ff6600", font=("Helvetica Neue", 9, "bold"))
     contact_title.pack(pady=(0, 5))
 
+    # контакты в две строки, чтобы длинный email влезал в окно
     buttons_frame = tk.Frame(contact_frame, bg=BG_COLOR)
     buttons_frame.pack()
-
     create_contact_button(buttons_frame, "Telegram @waffleeb", open_telegram)
     create_contact_button(buttons_frame, "GitHub wafflee16092010-max", open_github)
-    create_contact_button(buttons_frame, "Email artemtkacev417@email.com", open_email)
-    folder_btn = create_contact_button(buttons_frame, "[ " + LANG[current_lang]["open_folder"] + " ]", open_app_folder, "#ff6600")
+
+    buttons_frame2 = tk.Frame(contact_frame, bg=BG_COLOR)
+    buttons_frame2.pack()
+    create_contact_button(buttons_frame2, "Email artemtkacev417@gmail.com", open_email)
+    folder_btn = create_contact_button(buttons_frame2, "[ " + LANG[current_lang]["open_folder"] + " ]", open_app_folder, "#ff6600")
 
     tk.Label(contact_frame, text=f"v{APP_VERSION}", bg=BG_COLOR, fg="#666666", font=("Helvetica Neue", 8)).pack(pady=5)
 
@@ -755,40 +987,65 @@ def create_donate_section():
 create_donate_section()
 
 # трей
+tray_icon = None  # глобальная ссылка, чтобы можно было обновить меню при смене языка
+
+def build_tray_menu(pystray, on_show, on_quit):
+    """Собирает меню трея с актуальным языком.
+    default=True не ставим — на macOS он крашит процесс в связке с tkinter."""
+    tray_lang = LANG[current_lang]
+    return pystray.Menu(
+        pystray.MenuItem(tray_lang["tray_show"], on_show),
+        pystray.MenuItem(tray_lang["tray_quit"], on_quit)
+    )
+
+def update_tray_menu():
+    """Пересобирает меню трея при смене языка."""
+    if tray_icon is None:
+        return
+    try:
+        import pystray
+        tray_icon.menu = build_tray_menu(pystray, tray_icon._on_show, tray_icon._on_quit)
+        tray_icon.update_menu()
+    except Exception as e:
+        logger.error(f"Не удалось обновить меню трея: {e}")
+
 def setup_tray():
+    global tray_icon
     try:
         import pystray
         from PIL import Image
 
         icon_image = Image.new('RGB', (64, 64), color=(43, 122, 43))
 
-        def on_click(icon, item):
-            if item.name == "Показать":
-                root.deiconify()
-            elif item.name == "Выход":
-                icon.stop()
-                root.destroy()
-                sys.exit(0)
+        def on_show(icon, item):
+            # tkinter не потокобезопасен — дёргаем его только через root.after
+            root.after(0, root.deiconify)
 
+        def on_quit(icon, item):
+            # quit_app сам делает destroy + sys.exit в главном потоке
+            icon.stop()
+            root.after(0, quit_app)
+
+        # сохраняем обработчики, чтобы update_tray_menu мог пересобрать меню
         tray_icon = pystray.Icon(
             "ClusterSwitcher", icon_image, "Tanks Blitz Cluster Switcher",
-            menu=pystray.Menu(
-                pystray.MenuItem("Показать", on_click, default=True),
-                pystray.MenuSeparator(),
-                pystray.MenuItem("Выход", on_click)
-            )
+            menu=build_tray_menu(pystray, on_show, on_quit)
         )
+        tray_icon._on_show = on_show
+        tray_icon._on_quit = on_quit
 
         tray_thread = threading.Thread(target=tray_icon.run, daemon=True)
         tray_thread.start()
-        root.protocol("WM_DELETE_WINDOW", quit_app)
     except ImportError:
         pass
 
 try:
     setup_tray()
-except Exception:
-    pass
+except Exception as e:
+    logger.error(f"Трей не поднялся: {e}")
+
+# создаём backup_hosts в папке приложения сразу при старте
+ensure_backup_hosts()
 
 on_refresh()
 root.mainloop()
