@@ -53,7 +53,7 @@
 
 - Telegram: @waffleeb
 - GitHub: wafflee16092010-max
-- Email: artemtkacev417gmail.com
+- Email: artemtkacev417@gmail.com
 
 ## Поддержать
 
