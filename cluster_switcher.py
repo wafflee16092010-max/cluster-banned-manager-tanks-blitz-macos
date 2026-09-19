@@ -32,8 +32,6 @@ from tkinter import ttk, messagebox
 # цвета для crash-окна заданы заранее, на случай если краш до загрузки темы
 CRASH_BG = "#1a1a1a"
 CRASH_FG = "#ffffff"
-# защита от рекурсии: если crash-окно уже открыто, второй краш не создаёт новое
-_crash_shown = False
 
 # --- пути ---
 HOSTS_PATH = "/etc/hosts"
@@ -292,12 +290,6 @@ def open_app_folder():
 
 # --- crash handler ---
 def show_crash_message(error_text):
-    global _crash_shown
-    # если crash-окно уже открыто — второй краш уходит в stderr, без рекурсии
-    if _crash_shown:
-        print(error_text, file=sys.stderr)
-        return
-    _crash_shown = True
     # окно краша должно работать даже если главный root ещё не создан
     try:
         crash_window = tk.Toplevel()
@@ -986,20 +978,44 @@ def create_donate_section():
 create_donate_section()
 
 # трей
-# ВАЖНО: pystray в связке с tkinter внутри .app крашит процесс через ~10 сек
-# (NSInvalidArgumentException в Tk_GetColor при живом rumps-бэкенде).
-# Поэтому трей отключён — окно закрывается крестиком, обработчик уже стоит
-# через root.protocol("WM_DELETE_WINDOW", quit_app).
-tray_icon = None
-
 def setup_tray():
-    """Трей отключён — см. комментарий выше."""
-    return
+    try:
+        import pystray
+        from PIL import Image
+
+        icon_image = Image.new('RGB', (64, 64), color=(43, 122, 43))
+
+        tray_lang = LANG[current_lang]
+        tray_show_text = tray_lang["tray_show"]
+        tray_quit_text = tray_lang["tray_quit"]
+
+        def on_show(icon, item):
+            # tkinter не потокобезопасен — дёргаем его только через root.after
+            root.after(0, root.deiconify)
+
+        def on_quit(icon, item):
+            # quit_app сам делает destroy + sys.exit в главном потоке
+            icon.stop()
+            root.after(0, quit_app)
+
+        tray_icon = pystray.Icon(
+            "ClusterSwitcher", icon_image, "Tanks Blitz Cluster Switcher",
+            menu=pystray.Menu(
+                pystray.MenuItem(tray_show_text, on_show, default=True),
+                pystray.MenuSeparator(),
+                pystray.MenuItem(tray_quit_text, on_quit)
+            )
+        )
+
+        tray_thread = threading.Thread(target=tray_icon.run, daemon=True)
+        tray_thread.start()
+    except ImportError:
+        pass
 
 try:
     setup_tray()
-except Exception as e:
-    logger.error(f"Трей не поднялся: {e}")
+except Exception:
+    pass
 
 # создаём backup_hosts в папке приложения сразу при старте
 ensure_backup_hosts()
